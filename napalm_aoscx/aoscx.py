@@ -64,6 +64,8 @@ class AOSCXDriver(NetworkDriver):
         self.password = password
         self.timeout = timeout
         self.optional_args = optional_args
+        #Adding this due to the fact that optional args are not parsed from Nautobot to Napalm driver successfully
+        self.optional_args["use_cli"] = True
 
         self.platform = "aoscx"
         self.profile = [self.platform]

@@ -73,7 +73,11 @@ class AOSCXDriver(NetworkDriver):
         self.isAlive = False
         self.candidate_config = ''
 
-        self.base_url = "https://{0}/rest/v1/".format(self.hostname)
+        # AOS-CX REST v1 is deprecated, and on 10.09+ the v1-era behaviour this
+        # driver relied on is gone (Port table removed, depth=0 hangs). Every
+        # current switch is expected to serve v10.09. pyaoscx 1.0.0 routes any non-v1
+        # URL down its v10.04 code path, which is compatible.
+        self.base_url = "https://{0}/rest/v10.09/".format(self.hostname)
 
     def open(self):
         """
@@ -180,7 +184,7 @@ class AOSCXDriver(NetworkDriver):
         interfaces_return = {}
         interface_list = interface.get_all_interface_names(**self.session_info)
         for line in interface_list:
-            interface_details = interface.get_interface(line, **self.session_info)
+            interface_details = interface.get_interface(line, depth=1, **self.session_info)
             if 'description' not in interface_details:
                 interface_details['description'] = ""
             if 'max_speed' not in interface_details['hw_intf_info']:
@@ -235,7 +239,7 @@ class AOSCXDriver(NetworkDriver):
         interface_stats_dictionary = {}
         interface_list = interface.get_all_interface_names(**self.session_info)
         for line in interface_list:
-            interface_details = interface.get_interface(line, **self.session_info)
+            interface_details = interface.get_interface(line, depth=1, **self.session_info)
             print(interface_details['name'])
             interface_stats_dictionary.update(
                 {
@@ -486,7 +490,8 @@ class AOSCXDriver(NetworkDriver):
         interface_ip_dictionary = {}
         interface_list = interface.get_all_interface_names(**self.session_info)
         for line in interface_list:
-            interface_info = port.get_port(line, **self.session_info)
+            # /system/ports was merged into /system/interfaces in v10.04+.
+            interface_info = interface.get_interface(line, depth=1, **self.session_info)
             try:
                 interface_ip_list = {}
                 ip4_address = {}

@@ -275,27 +275,48 @@ class AOSCXDriver(NetworkDriver):
         dictionaries with the following information:
             * hostname
             * port
+
+        Raises CommandErrorException if the switch can't be queried. pyaoscx returns an
+        empty list on failure, which callers can't tell apart from "no neighbors" and
+        which would make them remove every LLDP-derived link.
         """
         lldp_brief_return = {}
-        lldp_interfaces_list = lldp.get_all_lldp_neighbors(**self.session_info)
-        for interface_uri in lldp_interfaces_list:
-            interface_name = interface_uri[interface_uri.find('interfaces/') + 11:
-                                           interface_uri.rfind('/lldp_neighbors')]
-            interface_name = common_ops._replace_percents(interface_name)
-            interface_details = \
-                lldp.get_lldp_neighbor_info(interface_name, **self.session_info)
+        # v1 returns a list of neighbor URIs, v10.x {interface: {"<chassis>,<port>": URI}}
+        listing = self._get_rest("system/interfaces/*/lldp_neighbors")
+        neighbor_uris = []
+        for entry in (listing.values() if isinstance(listing, dict) else listing):
+            neighbor_uris.extend(entry.values() if isinstance(entry, dict) else [entry])
 
-            if interface_name not in lldp_brief_return.keys():
-                lldp_brief_return[interface_name] = []
-
-            lldp_brief_return[interface_name].append(
-                {
-                    'hostname': interface_details['neighbor_info']['chassis_name'],
-                    'port:': interface_details['port_id']
-                }
-            )
+        for neighbor_uri in neighbor_uris:
+            interface_name = common_ops._replace_percents(
+                neighbor_uri[neighbor_uri.find('interfaces/') + 11:neighbor_uri.rfind('/lldp_neighbors')])
+            # Fetch each neighbor by its own URI: pyaoscx's get_lldp_neighbor_info only
+            # ever returns the first neighbor on a port
+            neighbor = self._get_rest(neighbor_uri)
+            neighbor_info = neighbor.get('neighbor_info') or {}
+            port = neighbor.get('port_id', '')
+            # Some neighbors (e.g. Ruckus ICX, Aruba APs) send a MAC address as the port ID;
+            # their interface name is then only in the port description
+            if neighbor_info.get('port_id_subtype') == 'link_local_addr' and neighbor_info.get('port_description'):
+                port = neighbor_info['port_description']
+            lldp_brief_return.setdefault(interface_name, []).append({
+                'hostname': neighbor_info.get('chassis_name', ''),
+                'port': port,
+            })
 
         return lldp_brief_return
+
+    def _get_rest(self, uri):
+        """GET a REST URI (absolute path, or relative to base_url) and return the JSON, raising on failure."""
+        if uri.startswith('/'):
+            url = "https://{0}{1}".format(self.hostname, uri)
+        else:
+            url = self.base_url + uri
+        response = self.session_info['s'].get(url, verify=False, timeout=self.timeout)
+        if not common_ops._response_ok(response, "GET"):
+            raise CommandErrorException("GET {0} failed with status code {1}: {2}".format(
+                url, response.status_code, response.text[:200]))
+        return response.json()
 
     def get_lldp_neighbors_detail(self, interface=""):
         """
